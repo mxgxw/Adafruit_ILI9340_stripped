@@ -14,12 +14,13 @@
   MIT license, all text above must be included in any redistribution
  ****************************************************/
 
-#include "Adafruit_ILI9340.h"
+#include "Adafruit_ILI9340_stripped.h"
 #include <avr/pgmspace.h>
 #include <limits.h>
 #include "pins_arduino.h"
 #include "wiring_private.h"
 #include <SPI.h>
+#include "glcdfont.c"
 
 #if defined(__SAM3X8E__)
 #include <include/pio.h>
@@ -39,7 +40,14 @@
 
 // Constructor when using software SPI.  All output pins are configurable.
 Adafruit_ILI9340::Adafruit_ILI9340(uint8_t cs, uint8_t dc, uint8_t mosi,
-				   uint8_t sclk, uint8_t rst, uint8_t miso) : Adafruit_GFX(ILI9340_TFTWIDTH, ILI9340_TFTHEIGHT) {
+				   uint8_t sclk, uint8_t rst, uint8_t miso) {
+  _width    = ILI9340_TFTWIDTH;
+  _height   = ILI9340_TFTHEIGHT;
+  rotation  = 0;
+  cursor_y  = cursor_x    = 0;
+  textsize  = 1;
+  textcolor = textbgcolor = 0xFFFF;
+  wrap      = true;
   _cs   = cs;
   _dc   = dc;
   _mosi  = mosi;
@@ -52,7 +60,14 @@ Adafruit_ILI9340::Adafruit_ILI9340(uint8_t cs, uint8_t dc, uint8_t mosi,
 
 // Constructor when using hardware SPI.  Faster, but must use SPI pins
 // specific to each board type (e.g. 11,13 for Uno, 51,52 for Mega, etc.)
-Adafruit_ILI9340::Adafruit_ILI9340(uint8_t cs, uint8_t dc, uint8_t rst) : Adafruit_GFX(ILI9340_TFTWIDTH, ILI9340_TFTHEIGHT) {
+Adafruit_ILI9340::Adafruit_ILI9340(uint8_t cs, uint8_t dc, uint8_t rst) {
+  _width    = ILI9340_TFTWIDTH;
+  _height   = ILI9340_TFTHEIGHT;
+  rotation  = 0;
+  cursor_y  = cursor_x    = 0;
+  textsize  = 1;
+  textcolor = textbgcolor = 0xFFFF;
+  wrap      = true;
   _cs   = cs;
   _dc   = dc;
   _rst  = rst;
@@ -60,96 +75,228 @@ Adafruit_ILI9340::Adafruit_ILI9340(uint8_t cs, uint8_t dc, uint8_t rst) : Adafru
   _mosi  = _sclk = 0;
 }
 
-void Adafruit_ILI9340::spiwrite(uint8_t c) {
+// Begin draw functions
+void Adafruit_ILI9340::drawPixel(int16_t x, int16_t y, uint16_t color) {
 
-  //Serial.print("0x"); Serial.print(c, HEX); Serial.print(", ");
+  if((x < 0) ||(x >= _width) || (y < 0) || (y >= _height)) return;
 
-  if (hwSPI) {
-#ifdef __AVR__
-    SPDR = c;
-    while(!(SPSR & _BV(SPIF)));
-#endif
-#if defined(USE_SPI_LIBRARY)
-    SPI.transfer(c);
-#endif
-  } else {
-    // Fast SPI bitbang swiped from LPD8806 library
-    for(uint8_t bit = 0x80; bit; bit >>= 1) {
-      if(c & bit) {
-        //digitalWrite(_mosi, HIGH); 
-        SET_BIT(mosiport, mosipinmask);
-      } else {
-        //digitalWrite(_mosi, LOW); 
-        CLEAR_BIT(mosiport, mosipinmask);
-      }
-      //digitalWrite(_sclk, HIGH);
-      SET_BIT(clkport, clkpinmask);
-      //digitalWrite(_sclk, LOW);
-      CLEAR_BIT(clkport, clkpinmask);
-    }
-  }
-}
+  setAddrWindow(x,y,x+1,y+1);
 
-
-void Adafruit_ILI9340::writecommand(uint8_t c) {
-  CLEAR_BIT(dcport, dcpinmask);
-  //digitalWrite(_dc, LOW);
-  CLEAR_BIT(clkport, clkpinmask);
-  //digitalWrite(_sclk, LOW);
-  CLEAR_BIT(csport, cspinmask);
-  //digitalWrite(_cs, LOW);
-
-  spiwrite(c);
-
-  SET_BIT(csport, cspinmask);
-  //digitalWrite(_cs, HIGH);
-}
-
-
-void Adafruit_ILI9340::writedata(uint8_t c) {
-  SET_BIT(dcport,  dcpinmask);
   //digitalWrite(_dc, HIGH);
-  CLEAR_BIT(clkport, clkpinmask);
-  //digitalWrite(_sclk, LOW);
-  CLEAR_BIT(csport, cspinmask);
+  SET_BIT(dcport, dcpinmask);
   //digitalWrite(_cs, LOW);
-  
-  spiwrite(c);
+  CLEAR_BIT(csport, cspinmask);
 
-  //digitalWrite(_cs, HIGH);
+  spiwrite(color >> 8);
+  spiwrite(color);
+
   SET_BIT(csport, cspinmask);
-} 
+  //digitalWrite(_cs, HIGH);
+}
 
-// Rather than a bazillion writecommand() and writedata() calls, screen
-// initialization commands and arguments are organized in these tables
-// stored in PROGMEM.  The table may look bulky, but that's mostly the
-// formatting -- storage-wise this is hundreds of bytes more compact
-// than the equivalent code.  Companion function follows.
-#define DELAY 0x80
+// Bresenham's algorithm - thx wikpedia
+void Adafruit_ILI9340::drawLine(int16_t x0, int16_t y0,
+			    int16_t x1, int16_t y1,
+			    uint16_t color) {
+  int16_t steep = abs(y1 - y0) > abs(x1 - x0);
+  if (steep) {
+    swap(x0, y0);
+    swap(x1, y1);
+  }
 
-// Companion code to the above tables.  Reads and issues
-// a series of LCD commands stored in PROGMEM byte array.
-void Adafruit_ILI9340::commandList(uint8_t *addr) {
+  if (x0 > x1) {
+    swap(x0, x1);
+    swap(y0, y1);
+  }
 
-  uint8_t  numCommands, numArgs;
-  uint16_t ms;
+  int16_t dx, dy;
+  dx = x1 - x0;
+  dy = abs(y1 - y0);
 
-  numCommands = pgm_read_byte(addr++);   // Number of commands to follow
-  while(numCommands--) {                 // For each command...
-    writecommand(pgm_read_byte(addr++)); //   Read, issue command
-    numArgs  = pgm_read_byte(addr++);    //   Number of args to follow
-    ms       = numArgs & DELAY;          //   If hibit set, delay follows args
-    numArgs &= ~DELAY;                   //   Mask out delay bit
-    while(numArgs--) {                   //   For each argument...
-      writedata(pgm_read_byte(addr++));  //     Read, issue argument
+  int16_t err = dx / 2;
+  int16_t ystep;
+
+  if (y0 < y1) {
+    ystep = 1;
+  } else {
+    ystep = -1;
+  }
+
+  for (; x0<=x1; x0++) {
+    if (steep) {
+      drawPixel(y0, x0, color);
+    } else {
+      drawPixel(x0, y0, color);
     }
-
-    if(ms) {
-      ms = pgm_read_byte(addr++); // Read post-command delay time (ms)
-      if(ms == 255) ms = 500;     // If 255, delay for 500 ms
-      delay(ms);
+    err -= dy;
+    if (err < 0) {
+      y0 += ystep;
+      err += dx;
     }
   }
+}
+
+
+void Adafruit_ILI9340::drawFastVLine(int16_t x, int16_t y, int16_t h,
+ uint16_t color) {
+
+  // Rudimentary clipping
+  if((x >= _width) || (y >= _height)) return;
+
+  if((y+h-1) >= _height) 
+    h = _height-y;
+
+  setAddrWindow(x, y, x, y+h-1);
+
+  uint8_t hi = color >> 8, lo = color;
+
+  SET_BIT(dcport, dcpinmask);
+  //digitalWrite(_dc, HIGH);
+  CLEAR_BIT(csport, cspinmask);
+  //digitalWrite(_cs, LOW);
+
+  while (h--) {
+    spiwrite(hi);
+    spiwrite(lo);
+  }
+  SET_BIT(csport, cspinmask);
+  //digitalWrite(_cs, HIGH);
+}
+
+
+void Adafruit_ILI9340::drawFastHLine(int16_t x, int16_t y, int16_t w,
+  uint16_t color) {
+
+  // Rudimentary clipping
+  if((x >= _width) || (y >= _height)) return;
+  if((x+w-1) >= _width)  w = _width-x;
+  setAddrWindow(x, y, x+w-1, y);
+
+  uint8_t hi = color >> 8, lo = color;
+  SET_BIT(dcport, dcpinmask);
+  CLEAR_BIT(csport, cspinmask);
+  //digitalWrite(_dc, HIGH);
+  //digitalWrite(_cs, LOW);
+  while (w--) {
+    spiwrite(hi);
+    spiwrite(lo);
+  }
+  SET_BIT(csport, cspinmask);
+  //digitalWrite(_cs, HIGH);
+}
+
+// fill a rectangle
+void Adafruit_ILI9340::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
+  uint16_t color) {
+
+  // rudimentary clipping (drawChar w/big text requires this)
+  if((x >= _width) || (y >= _height)) return;
+  if((x + w - 1) >= _width)  w = _width  - x;
+  if((y + h - 1) >= _height) h = _height - y;
+
+  setAddrWindow(x, y, x+w-1, y+h-1);
+
+  uint8_t hi = color >> 8, lo = color;
+
+  SET_BIT(dcport, dcpinmask);
+  //digitalWrite(_dc, HIGH);
+  CLEAR_BIT(csport, cspinmask);
+  //digitalWrite(_cs, LOW);
+
+  for(y=h; y>0; y--) {
+    for(x=w; x>0; x--) {
+      spiwrite(hi);
+      spiwrite(lo);
+    }
+  }
+  //digitalWrite(_cs, HIGH);
+  SET_BIT(csport, cspinmask);
+}
+
+void Adafruit_ILI9340::fillScreen(uint16_t color) {
+  fillRect(0, 0,  _width, _height, color);
+}
+
+void Adafruit_ILI9340::drawChar(int16_t x, int16_t y, unsigned char c,
+			    uint16_t color, uint16_t bg, uint8_t size) {
+
+  if((x >= _width)            || // Clip right
+     (y >= _height)           || // Clip bottom
+     ((x + 6 * size - 1) < 0) || // Clip left
+     ((y + 8 * size - 1) < 0))   // Clip top
+    return;
+
+  for (int8_t i=0; i<6; i++ ) {
+    uint8_t line;
+    if (i == 5) 
+      line = 0x0;
+    else 
+      line = pgm_read_byte(font+(c*5)+i);
+    for (int8_t j = 0; j<8; j++) {
+      if (line & 0x1) {
+        if (size == 1) // default size
+          drawPixel(x+i, y+j, color);
+        else {  // big size
+          fillRect(x+(i*size), y+(j*size), size, size, color);
+        } 
+      } else if (bg != color) {
+        if (size == 1) // default size
+          drawPixel(x+i, y+j, bg);
+        else {  // big size
+          fillRect(x+i*size, y+j*size, size, size, bg);
+        }
+      }
+      line >>= 1;
+    }
+  }
+}
+
+void Adafruit_ILI9340::setCursor(int16_t x, int16_t y) {
+  cursor_x = x;
+  cursor_y = y;
+}
+
+void Adafruit_ILI9340::setTextColor(uint16_t c) {
+  // For 'transparent' background, we'll set the bg 
+  // to the same as fg instead of using a flag
+  textcolor = textbgcolor = c;
+}
+
+void Adafruit_ILI9340::setTextColor(uint16_t c, uint16_t b) {
+  textcolor   = c;
+  textbgcolor = b; 
+}
+
+void Adafruit_ILI9340::setTextSize(uint8_t s) {
+  textsize = (s > 0) ? s : 1;
+}
+
+void Adafruit_ILI9340::setTextWrap(boolean w) {
+  wrap = w;
+}
+// End draw functions
+
+// Implementation Specific draw functions
+void Adafruit_ILI9340::pushColor(uint16_t color) {
+  //digitalWrite(_dc, HIGH);
+  SET_BIT(dcport, dcpinmask);
+  //digitalWrite(_cs, LOW);
+  CLEAR_BIT(csport, cspinmask);
+
+  spiwrite(color >> 8);
+  spiwrite(color);
+
+  SET_BIT(csport, cspinmask);
+  //digitalWrite(_cs, HIGH);
+}
+
+void Adafruit_ILI9340::invertDisplay(boolean i) {
+  writecommand(i ? ILI9340_INVON : ILI9340_INVOFF);
+}
+
+// Pass 8-bit (each) R,G,B, get back 16-bit packed color
+uint16_t Adafruit_ILI9340::Color565(uint8_t r, uint8_t g, uint8_t b) {
+  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
 }
 
 
@@ -336,7 +483,6 @@ void Adafruit_ILI9340::begin(void) {
   writecommand(ILI9340_DISPON);    //Display on 
 }
 
-
 void Adafruit_ILI9340::setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1,
  uint16_t y1) {
 
@@ -355,126 +501,7 @@ void Adafruit_ILI9340::setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1,
   writecommand(ILI9340_RAMWR); // write to RAM
 }
 
-
-void Adafruit_ILI9340::pushColor(uint16_t color) {
-  //digitalWrite(_dc, HIGH);
-  SET_BIT(dcport, dcpinmask);
-  //digitalWrite(_cs, LOW);
-  CLEAR_BIT(csport, cspinmask);
-
-  spiwrite(color >> 8);
-  spiwrite(color);
-
-  SET_BIT(csport, cspinmask);
-  //digitalWrite(_cs, HIGH);
-}
-
-void Adafruit_ILI9340::drawPixel(int16_t x, int16_t y, uint16_t color) {
-
-  if((x < 0) ||(x >= _width) || (y < 0) || (y >= _height)) return;
-
-  setAddrWindow(x,y,x+1,y+1);
-
-  //digitalWrite(_dc, HIGH);
-  SET_BIT(dcport, dcpinmask);
-  //digitalWrite(_cs, LOW);
-  CLEAR_BIT(csport, cspinmask);
-
-  spiwrite(color >> 8);
-  spiwrite(color);
-
-  SET_BIT(csport, cspinmask);
-  //digitalWrite(_cs, HIGH);
-}
-
-
-void Adafruit_ILI9340::drawFastVLine(int16_t x, int16_t y, int16_t h,
- uint16_t color) {
-
-  // Rudimentary clipping
-  if((x >= _width) || (y >= _height)) return;
-
-  if((y+h-1) >= _height) 
-    h = _height-y;
-
-  setAddrWindow(x, y, x, y+h-1);
-
-  uint8_t hi = color >> 8, lo = color;
-
-  SET_BIT(dcport, dcpinmask);
-  //digitalWrite(_dc, HIGH);
-  CLEAR_BIT(csport, cspinmask);
-  //digitalWrite(_cs, LOW);
-
-  while (h--) {
-    spiwrite(hi);
-    spiwrite(lo);
-  }
-  SET_BIT(csport, cspinmask);
-  //digitalWrite(_cs, HIGH);
-}
-
-
-void Adafruit_ILI9340::drawFastHLine(int16_t x, int16_t y, int16_t w,
-  uint16_t color) {
-
-  // Rudimentary clipping
-  if((x >= _width) || (y >= _height)) return;
-  if((x+w-1) >= _width)  w = _width-x;
-  setAddrWindow(x, y, x+w-1, y);
-
-  uint8_t hi = color >> 8, lo = color;
-  SET_BIT(dcport, dcpinmask);
-  CLEAR_BIT(csport, cspinmask);
-  //digitalWrite(_dc, HIGH);
-  //digitalWrite(_cs, LOW);
-  while (w--) {
-    spiwrite(hi);
-    spiwrite(lo);
-  }
-  SET_BIT(csport, cspinmask);
-  //digitalWrite(_cs, HIGH);
-}
-
-void Adafruit_ILI9340::fillScreen(uint16_t color) {
-  fillRect(0, 0,  _width, _height, color);
-}
-
-// fill a rectangle
-void Adafruit_ILI9340::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
-  uint16_t color) {
-
-  // rudimentary clipping (drawChar w/big text requires this)
-  if((x >= _width) || (y >= _height)) return;
-  if((x + w - 1) >= _width)  w = _width  - x;
-  if((y + h - 1) >= _height) h = _height - y;
-
-  setAddrWindow(x, y, x+w-1, y+h-1);
-
-  uint8_t hi = color >> 8, lo = color;
-
-  SET_BIT(dcport, dcpinmask);
-  //digitalWrite(_dc, HIGH);
-  CLEAR_BIT(csport, cspinmask);
-  //digitalWrite(_cs, LOW);
-
-  for(y=h; y>0; y--) {
-    for(x=w; x>0; x--) {
-      spiwrite(hi);
-      spiwrite(lo);
-    }
-  }
-  //digitalWrite(_cs, HIGH);
-  SET_BIT(csport, cspinmask);
-}
-
-
-// Pass 8-bit (each) R,G,B, get back 16-bit packed color
-uint16_t Adafruit_ILI9340::Color565(uint8_t r, uint8_t g, uint8_t b) {
-  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-}
-
-
+/*
 void Adafruit_ILI9340::setRotation(uint8_t m) {
 
   writecommand(ILI9340_MADCTL);
@@ -501,16 +528,100 @@ void Adafruit_ILI9340::setRotation(uint8_t m) {
      _height = ILI9340_TFTWIDTH;
      break;
   }
+}*/
+
+// SPI Helpers
+void Adafruit_ILI9340::spiwrite(uint8_t c) {
+
+  //Serial.print("0x"); Serial.print(c, HEX); Serial.print(", ");
+
+  if (hwSPI) {
+#ifdef __AVR__
+    SPDR = c;
+    while(!(SPSR & _BV(SPIF)));
+#endif
+#if defined(USE_SPI_LIBRARY)
+    SPI.transfer(c);
+#endif
+  } else {
+    // Fast SPI bitbang swiped from LPD8806 library
+    for(uint8_t bit = 0x80; bit; bit >>= 1) {
+      if(c & bit) {
+        //digitalWrite(_mosi, HIGH); 
+        SET_BIT(mosiport, mosipinmask);
+      } else {
+        //digitalWrite(_mosi, LOW); 
+        CLEAR_BIT(mosiport, mosipinmask);
+      }
+      //digitalWrite(_sclk, HIGH);
+      SET_BIT(clkport, clkpinmask);
+      //digitalWrite(_sclk, LOW);
+      CLEAR_BIT(clkport, clkpinmask);
+    }
+  }
 }
 
+void Adafruit_ILI9340::writecommand(uint8_t c) {
+  CLEAR_BIT(dcport, dcpinmask);
+  //digitalWrite(_dc, LOW);
+  CLEAR_BIT(clkport, clkpinmask);
+  //digitalWrite(_sclk, LOW);
+  CLEAR_BIT(csport, cspinmask);
+  //digitalWrite(_cs, LOW);
 
-void Adafruit_ILI9340::invertDisplay(boolean i) {
-  writecommand(i ? ILI9340_INVON : ILI9340_INVOFF);
+  spiwrite(c);
+
+  SET_BIT(csport, cspinmask);
+  //digitalWrite(_cs, HIGH);
 }
 
+void Adafruit_ILI9340::writedata(uint8_t c) {
+  SET_BIT(dcport,  dcpinmask);
+  //digitalWrite(_dc, HIGH);
+  CLEAR_BIT(clkport, clkpinmask);
+  //digitalWrite(_sclk, LOW);
+  CLEAR_BIT(csport, cspinmask);
+  //digitalWrite(_cs, LOW);
+  
+  spiwrite(c);
+
+  //digitalWrite(_cs, HIGH);
+  SET_BIT(csport, cspinmask);
+} 
+
+// Rather than a bazillion writecommand() and writedata() calls, screen
+// initialization commands and arguments are organized in these tables
+// stored in PROGMEM.  The table may look bulky, but that's mostly the
+// formatting -- storage-wise this is hundreds of bytes more compact
+// than the equivalent code.  Companion function follows.
+#define DELAY 0x80
+
+// Companion code to the above tables.  Reads and issues
+// a series of LCD commands stored in PROGMEM byte array.
+void Adafruit_ILI9340::commandList(uint8_t *addr) {
+
+  uint8_t  numCommands, numArgs;
+  uint16_t ms;
+
+  numCommands = pgm_read_byte(addr++);   // Number of commands to follow
+  while(numCommands--) {                 // For each command...
+    writecommand(pgm_read_byte(addr++)); //   Read, issue command
+    numArgs  = pgm_read_byte(addr++);    //   Number of args to follow
+    ms       = numArgs & DELAY;          //   If hibit set, delay follows args
+    numArgs &= ~DELAY;                   //   Mask out delay bit
+    while(numArgs--) {                   //   For each argument...
+      writedata(pgm_read_byte(addr++));  //     Read, issue argument
+    }
+
+    if(ms) {
+      ms = pgm_read_byte(addr++); // Read post-command delay time (ms)
+      if(ms == 255) ms = 500;     // If 255, delay for 500 ms
+      delay(ms);
+    }
+  }
+}
 
 ////////// stuff not actively being used, but kept for posterity
-
 
 uint8_t Adafruit_ILI9340::spiread(void) {
   uint8_t r = 0;
@@ -539,6 +650,38 @@ uint8_t Adafruit_ILI9340::spiread(void) {
   return r;
 }
 
+#if ARDUINO >= 100
+size_t Adafruit_ILI9340::write(uint8_t c) {
+#else
+void Adafruit_ILI9340::write(uint8_t c) {
+#endif
+  if (c == '\n') {
+    cursor_y += textsize*8;
+    cursor_x  = 0;
+  } else if (c == '\r') {
+    // skip em
+  } else {
+    drawChar(cursor_x, cursor_y, c, textcolor, textbgcolor, textsize);
+    cursor_x += textsize*6;
+    if (wrap && (cursor_x > (_width - textsize*6))) {
+      cursor_y += textsize*8;
+      cursor_x = 0;
+    }
+  }
+#if ARDUINO >= 100
+  return 1;
+#endif
+}
+
+int16_t Adafruit_ILI9340::width(void) {
+  return _width;
+}
+ 
+int16_t Adafruit_ILI9340::height(void) {
+  return _height;
+}
+/*
+
  uint8_t Adafruit_ILI9340::readdata(void) {
    digitalWrite(_dc, HIGH);
    digitalWrite(_cs, LOW);
@@ -560,10 +703,6 @@ uint8_t Adafruit_ILI9340::spiread(void) {
    digitalWrite(_cs, HIGH);
    return r;
 }
-
-
- 
-/*
 
  uint16_t Adafruit_ILI9340::readcommand16(uint8_t c) {
  digitalWrite(_dc, LOW);

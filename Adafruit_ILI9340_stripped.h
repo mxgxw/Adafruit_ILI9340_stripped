@@ -11,11 +11,18 @@
   products from Adafruit!
 
   Written by Limor Fried/Ladyada for Adafruit Industries.
-  MIT license, all text above must be included in any redistribution
+  MIT license, all text above must be included in any redistribution.
+  
+  Modified by Mario Gomez/mxgxw < mario.gomez _at- teubi.co >.
+  Feb 2014.
+  Notes: Inheritance removed, all parent class methods
+  were implemented on the client class. Formatting modified for
+  readability. Using this class reduces the compiled
+  output size in about 6KiB (For Leonardo).
  ****************************************************/
 
-#ifndef _ADAFRUIT_ILI9340H_
-#define _ADAFRUIT_ILI9340H_
+#ifndef _ADAFRUIT_ILI9340H_stripped
+#define _ADAFRUIT_ILI9340H_stripped
 
 #if ARDUINO >= 100
  #include "Arduino.h"
@@ -23,7 +30,6 @@
 #else
  #include "WProgram.h"
 #endif
-#include <Adafruit_GFX.h>
 
 #if defined(__SAM3X8E__)
 #include <include/pio.h>
@@ -35,7 +41,6 @@
 #ifdef __AVR__
   #include <avr/pgmspace.h>
 #endif
-
 
 #define ILI9340_TFTWIDTH  240
 #define ILI9340_TFTHEIGHT 320
@@ -69,7 +74,6 @@
 
 #define ILI9340_PTLAR   0x30
 #define ILI9340_MADCTL  0x36
-
 
 #define ILI9340_MADCTL_MY  0x80
 #define ILI9340_MADCTL_MX  0x40
@@ -117,48 +121,85 @@
 #define ILI9340_YELLOW  0xFFE0  
 #define ILI9340_WHITE   0xFFFF
 
+#define swap(a, b) { int16_t t = a; a = b; b = t; }
 
-class Adafruit_ILI9340 : public Adafruit_GFX {
+class Adafruit_ILI9340 : public Print {
 
  public:
 
-  Adafruit_ILI9340(uint8_t CS, uint8_t RS, uint8_t MOSI, uint8_t SCLK,
-		   uint8_t RST, uint8_t MISO);
-  Adafruit_ILI9340(uint8_t CS, uint8_t RS, uint8_t RST);
-
-  void     begin(void),
-           setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1),
-           pushColor(uint16_t color),
-           fillScreen(uint16_t color),
-           drawPixel(int16_t x, int16_t y, uint16_t color),
-           drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color),
-           drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color),
-           fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
-             uint16_t color),
-           setRotation(uint8_t r),
-           invertDisplay(boolean i);
+  Adafruit_ILI9340(
+    uint8_t CS,
+    uint8_t RS,
+    uint8_t MOSI,
+    uint8_t SCLK,
+    uint8_t RST,
+    uint8_t MISO
+  );
+  
+  Adafruit_ILI9340(
+    uint8_t CS,
+    uint8_t RS,
+    uint8_t RST
+  );
+  
+  // Begin draw functions
+  void drawPixel(int16_t x, int16_t y, uint16_t color);
+  void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
+  void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
+  void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
+  void fillRect(int16_t x, int16_t y, int16_t w,
+          int16_t h, uint16_t color);
+  void fillScreen(uint16_t color);
+  void drawChar(int16_t x, int16_t y, unsigned char c,
+          uint16_t color,uint16_t bg, uint8_t size);
+  void setCursor(int16_t x, int16_t y);
+  void setTextColor(uint16_t c);
+  void setTextColor(uint16_t c, uint16_t bg);
+  void setTextSize(uint8_t s);
+  void setTextWrap(boolean w);
+  // End draw functions
+  
+  // Implementation Specific draw functions
+  void pushColor(uint16_t color);
+  void invertDisplay(boolean i);
   uint16_t Color565(uint8_t r, uint8_t g, uint8_t b);
 
+  void begin(void);
+  void setAddrWindow(uint16_t x0, uint16_t y0,
+          uint16_t x1, uint16_t y1);
+           
+           //setRotation(uint8_t r),
+
   /* These are not for current use, 8-bit protocol only! */
-  uint8_t  readdata(void),
-           readcommand8(uint8_t);
+  //uint8_t  readdata(void),
+  //         readcommand8(uint8_t);
+           
+  
+  // SPI Helpers
+  void     spiwrite(uint8_t),
+    writecommand(uint8_t c),
+    writedata(uint8_t d),
+    commandList(uint8_t *addr);
+  uint8_t  spiread(void);
   /*
   uint16_t readcommand16(uint8_t);
   uint32_t readcommand32(uint8_t);
   void     dummyclock(void);
   */  
 
-  void     spiwrite(uint8_t),
-    writecommand(uint8_t c),
-    writedata(uint8_t d),
-    commandList(uint8_t *addr);
-  uint8_t  spiread(void);
+#if ARDUINO >= 100
+  virtual size_t write(uint8_t);
+#else
+  virtual void   write(uint8_t);
+#endif
+
+  int16_t
+    height(void),
+    width(void);
 
  private:
   uint8_t  tabcolor;
-
-
-
+  
   boolean  hwSPI;
 #ifdef __AVR__  
   volatile uint8_t *mosiport, *clkport, *dcport, *rsport, *csport;
@@ -175,6 +216,16 @@ class Adafruit_ILI9340 : public Adafruit_GFX {
   uint8_t  _cs, _dc, _rst, _mosi, _miso, _sclk,
            mosipinmask, clkpinmask, cspinmask, dcpinmask;
 #endif
+  int16_t
+    _width, _height, // Display w/h as modified by current rotation
+    cursor_x, cursor_y;
+  uint16_t
+    textcolor, textbgcolor;
+  uint8_t
+    textsize,
+    rotation;
+  boolean
+    wrap;
 };
 
 #endif
