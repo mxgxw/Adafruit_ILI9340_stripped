@@ -94,6 +94,7 @@ void Adafruit_ILI9340::drawPixel(int16_t x, int16_t y, uint16_t color) {
   //digitalWrite(_cs, HIGH);
 }
 
+#ifdef ADA_GFX_DRAWLINE
 // Bresenham's algorithm - thx wikpedia
 void Adafruit_ILI9340::drawLine(int16_t x0, int16_t y0,
 			    int16_t x1, int16_t y1,
@@ -135,8 +136,9 @@ void Adafruit_ILI9340::drawLine(int16_t x0, int16_t y0,
     }
   }
 }
+#endif
 
-
+#ifdef ADA_GFX_DRAWFASTVLINE
 void Adafruit_ILI9340::drawFastVLine(int16_t x, int16_t y, int16_t h,
  uint16_t color) {
 
@@ -162,8 +164,9 @@ void Adafruit_ILI9340::drawFastVLine(int16_t x, int16_t y, int16_t h,
   SET_BIT(csport, cspinmask);
   //digitalWrite(_cs, HIGH);
 }
+#endif
 
-
+#ifdef ADA_GFX_DRAWFASTHLINE
 void Adafruit_ILI9340::drawFastHLine(int16_t x, int16_t y, int16_t w,
   uint16_t color) {
 
@@ -184,7 +187,9 @@ void Adafruit_ILI9340::drawFastHLine(int16_t x, int16_t y, int16_t w,
   SET_BIT(csport, cspinmask);
   //digitalWrite(_cs, HIGH);
 }
+#endif
 
+#ifdef ADA_GFX_FILLRECT
 // fill a rectangle
 void Adafruit_ILI9340::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
   uint16_t color) {
@@ -212,11 +217,15 @@ void Adafruit_ILI9340::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
   //digitalWrite(_cs, HIGH);
   SET_BIT(csport, cspinmask);
 }
+#endif
 
+#ifdef ADA_GFX_FILLSCREEN
 void Adafruit_ILI9340::fillScreen(uint16_t color) {
   fillRect(0, 0,  _width, _height, color);
 }
+#endif
 
+#ifdef ADA_GFX_DRAWCHAR
 void Adafruit_ILI9340::drawChar(int16_t x, int16_t y, unsigned char c,
 			    uint16_t color, uint16_t bg, uint8_t size) {
 
@@ -250,30 +259,41 @@ void Adafruit_ILI9340::drawChar(int16_t x, int16_t y, unsigned char c,
     }
   }
 }
+#endif
 
+#ifdef ADA_GFX_SETCURSOR
 void Adafruit_ILI9340::setCursor(int16_t x, int16_t y) {
   cursor_x = x;
   cursor_y = y;
 }
+#endif
 
+#ifdef ADA_GFX_SETTEXTCOLOR
 void Adafruit_ILI9340::setTextColor(uint16_t c) {
   // For 'transparent' background, we'll set the bg 
   // to the same as fg instead of using a flag
   textcolor = textbgcolor = c;
 }
+#ifdef
 
+#ifdef ADA_GFX_SETTEXTCOLOR
 void Adafruit_ILI9340::setTextColor(uint16_t c, uint16_t b) {
   textcolor   = c;
   textbgcolor = b; 
 }
+#ifdef
 
+#ifdef ADA_GFX_SETTEXTSIZE
 void Adafruit_ILI9340::setTextSize(uint8_t s) {
   textsize = (s > 0) ? s : 1;
 }
+#ifdef
 
+#ifdef ADA_GFX_SETTEXTWRAP
 void Adafruit_ILI9340::setTextWrap(boolean w) {
   wrap = w;
 }
+#ifdef
 // End draw functions
 
 // Implementation Specific draw functions
